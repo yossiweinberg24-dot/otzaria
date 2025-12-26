@@ -132,6 +132,7 @@ dev_dependencies:
   build_runner: ^2.4.11
   bloc_test: ^10.0.0
   mockito: ^5.4.4
+  string_extractor_intl: ^0.3.2   # check pub.dev for latest, works well in 2025
 
 # For information on the generic Dart part of this file, see the
 # following page: https://dart.dev/tools/pub/pubspec
