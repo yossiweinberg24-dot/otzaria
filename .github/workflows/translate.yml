@@ -1,88 +1,78 @@
-name: Extract Hebrew Strings + Auto-Translate for Review
+name: Hebrew Strings → English Review
 
 on:
-  workflow_dispatch:
+  workflow_dispatch:          # Run manually when you want
   push:
     paths:
-      - 'lib/**'
-      - 'translation_review.json'
+      - 'lib/**'              # Or trigger on code changes
 
 jobs:
-  extract-translate-review:
+  extract-and-review:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
 
-      - name: Setup Flutter
-        uses: subosito/flutter-action@v2
+      - uses: subosito/flutter-action@v2
         with:
           flutter-version: '3.x'
           channel: 'stable'
 
-      - name: Install dependencies
-        run: flutter pub get
+      - run: flutter pub get
 
-      - name: Extract strings using string_extractor_intl
+      - name: Extract Hebrew strings
         run: |
           dart pub run string_extractor_intl:extract_strings \
             --input lib \
             --output . \
-            --template-arb temp_review.arb \
+            --template-arb app_he.arb \
             --class-name Temp \
             --no-replace
 
-      - name: Convert extraction + auto-translate to review JSON
+      - name: Suggest English translations
         run: |
           python3 - << 'EOF'
-          import json
+          import json, subprocess, sys
           from pathlib import Path
-          import subprocess
-          import sys
-
-          # Install lightweight translator
-          subprocess.run([sys.executable, "-m", "pip", "install", "googletrans==4.0.0-rc1"], check=True)
           from googletrans import Translator
+
+          subprocess.run([sys.executable, "-m", "pip", "install", "googletrans==4.0.0-rc1"], check=True)
           translator = Translator()
 
-          REVIEW_FILE = Path("translation_review.json")
-          ARB_FILE = Path("temp_review.arb")
+          arb_file = Path("app_he.arb")
+          review_file = Path("translation_review.json")
 
-          if not ARB_FILE.exists():
-              print("No strings extracted")
+          if not arb_file.exists():
+              print("No strings found")
               sys.exit(0)
 
-          arb_data = json.loads(ARB_FILE.read_text(encoding="utf-8"))
+          data = json.loads(arb_file.read_text(encoding="utf-8"))
           review = {}
 
-          hebrew_range = range(0x0590, 0x05FF + 1)
-
-          for key, value in arb_data.items():
-              if key.startswith("@"):
-                  continue
-              if not any(ord(c) in hebrew_range for c in value):
+          for key, value in data.items():
+              if key.startswith("@") or not any(0x0590 <= ord(c) <= 0x05FF for c in str(value)):
                   continue
               try:
-                  translated = translator.translate(value, src='he', dest='en').text
-              except Exception as e:
-                  translated = f"[TRANSLATE_FAILED: {str(e)}] {value}"
-              review[value] = translated
+                  suggested = translator.translate(str(value), src='he', dest='en').text
+                  review[key] = {"hebrew": value, "english": suggested}
+              except:
+                  review[key] = {"hebrew": value, "english": "[translation failed]"}
 
-          if review:
-              REVIEW_FILE.write_text(json.dumps(review, ensure_ascii=False, indent=2), encoding="utf-8")
-              print(f"Generated review file with {len(review)} Hebrew strings")
-          else:
-              print("No Hebrew strings found")
+          review_file.write_text(json.dumps(review, ensure_ascii=False, indent=2), encoding="utf-8")
+          print(f"Review file created with {len(review)} strings")
           EOF
 
-      - name: Clean up temp
-        run: rm -f temp_review.arb
-
-      - name: Commit review file if changed
+      - name: Commit review file
         run: |
           git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add translation_review.json
-          git commit -m "chore: update Hebrew → English translation review file" || echo "Nothing to commit"
+          git config user.email "actions@github.com"
+          git add translation_review.json app_he.arb
+          git commit -m "Update Hebrew strings review file" || echo "No changes"
           git push || echo "No push needed"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: review-files
+          path: |
+            translation_review.json
+            app_he.arb
