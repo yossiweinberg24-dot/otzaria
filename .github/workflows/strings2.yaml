@@ -1,0 +1,78 @@
+name: Hebrew Strings → English Review
+
+on:
+  workflow_dispatch:          # Run manually when you want
+  push:
+    paths:
+      - 'lib/**'              # Or trigger on code changes
+
+jobs:
+  extract-and-review:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.x'
+          channel: 'stable'
+
+      - run: flutter pub get
+
+      - name: Extract Hebrew strings
+        run: |
+          dart pub run string_extractor_intl:extract_strings \
+            --input lib \
+            --output . \
+            --template-arb app_he.arb \
+            --class-name Temp \
+            --no-replace
+
+      - name: Suggest English translations
+        run: |
+          python3 - << 'EOF'
+          import json, subprocess, sys
+          from pathlib import Path
+          from googletrans import Translator
+
+          subprocess.run([sys.executable, "-m", "pip", "install", "googletrans==4.0.0-rc1"], check=True)
+          translator = Translator()
+
+          arb_file = Path("app_he.arb")
+          review_file = Path("translation_review.json")
+
+          if not arb_file.exists():
+              print("No strings found")
+              sys.exit(0)
+
+          data = json.loads(arb_file.read_text(encoding="utf-8"))
+          review = {}
+
+          for key, value in data.items():
+              if key.startswith("@") or not any(0x0590 <= ord(c) <= 0x05FF for c in str(value)):
+                  continue
+              try:
+                  suggested = translator.translate(str(value), src='he', dest='en').text
+                  review[key] = {"hebrew": value, "english": suggested}
+              except:
+                  review[key] = {"hebrew": value, "english": "[translation failed]"}
+
+          review_file.write_text(json.dumps(review, ensure_ascii=False, indent=2), encoding="utf-8")
+          print(f"Review file created with {len(review)} strings")
+          EOF
+
+      - name: Commit review file
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "actions@github.com"
+          git add translation_review.json app_he.arb
+          git commit -m "Update Hebrew strings review file" || echo "No changes"
+          git push || echo "No push needed"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: review-files
+          path: |
+            translation_review.json
+            app_he.arb
